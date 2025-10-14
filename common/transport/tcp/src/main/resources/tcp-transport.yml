@@ -1,0 +1,77 @@
+#
+# Copyright © 2016-2025 The Thingsboard Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+
+# TCP Transport Configuration
+
+transport:
+  tcp:
+    # Enable TCP transport
+    enabled: "${TCP_ENABLED:false}"
+    
+    # TCP server bind address
+    bind_address: "${TCP_BIND_ADDRESS:0.0.0.0}"
+    
+    # TCP server bind port
+    bind_port: "${TCP_BIND_PORT:8883}"
+    
+    # SSL/TLS Configuration
+    ssl:
+      # Enable SSL/TLS
+      enabled: "${TCP_SSL_ENABLED:false}"
+      
+      # SSL bind address
+      bind_address: "${TCP_SSL_BIND_ADDRESS:0.0.0.0}"
+      
+      # SSL bind port
+      bind_port: "${TCP_SSL_BIND_PORT:8884}"
+      
+      # SSL protocol (TLSv1.2, TLSv1.3)
+      protocol: "${TCP_SSL_PROTOCOL:TLSv1.2}"
+      
+      # Key store configuration
+      key_store: "${TCP_SSL_KEY_STORE:}"
+      key_store_password: "${TCP_SSL_KEY_STORE_PASSWORD:}"
+      
+      # Trust store configuration (for mutual TLS)
+      trust_store: "${TCP_SSL_TRUST_STORE:}"
+      trust_store_password: "${TCP_SSL_TRUST_STORE_PASSWORD:}"
+    
+    # Netty Configuration
+    netty:
+      # Leak detector level: DISABLED, SIMPLE, ADVANCED, PARANOID
+      leak_detector_level: "${TCP_NETTY_LEAK_DETECTOR_LEVEL:DISABLED}"
+      
+      # Boss group thread count
+      boss_group_thread_count: "${TCP_NETTY_BOSS_GROUP_THREADS:1}"
+      
+      # Worker group thread count
+      worker_group_thread_count: "${TCP_NETTY_WORKER_GROUP_THREADS:12}"
+      
+      # SO_KEEPALIVE option
+      so_keep_alive: "${TCP_NETTY_SO_KEEPALIVE:true}"
+      
+      # Maximum payload size in bytes
+      max_payload_size: "${TCP_NETTY_MAX_PAYLOAD_SIZE:65536}"
+    
+    # Message queue size per device limit
+    msg_queue_size_per_device_limit: "${TCP_MSG_QUEUE_SIZE_PER_DEVICE:100}"
+    
+    # Timeout in milliseconds
+    timeout: "${TCP_TIMEOUT:10000}"
+    
+    # Disconnect timeout in milliseconds
+    disconnect_timeout: "${TCP_DISCONNECT_TIMEOUT:1000}"
+

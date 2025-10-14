@@ -41,6 +41,7 @@
         <module>coap</module>
         <module>lwm2m</module>
         <module>snmp</module>
+        <module>tcp</module>
     </modules>
 
 </project>

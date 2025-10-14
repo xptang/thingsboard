@@ -999,6 +999,11 @@
             </dependency>
             <dependency>
                 <groupId>org.thingsboard.common.transport</groupId>
+                <artifactId>tcp</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.thingsboard.common.transport</groupId>
                 <artifactId>http</artifactId>
                 <version>${project.version}</version>
             </dependency>

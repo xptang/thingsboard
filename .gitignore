@@ -37,3 +37,7 @@ rebuild-docker.sh
 */.run/**
 .run/**
 .run
+**/__pycache__/**
+**/__pycache__
+**/__pycache__/
+**/__pycache__/
