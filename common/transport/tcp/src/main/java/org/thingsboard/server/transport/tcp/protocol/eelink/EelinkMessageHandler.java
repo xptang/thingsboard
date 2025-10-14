@@ -15,10 +15,11 @@
  */
 package org.thingsboard.server.transport.tcp.protocol.eelink;
 
-import io.netty.buffer.ByteBuf;
+import com.google.gson.JsonParser;
 import io.netty.channel.ChannelHandlerContext;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
+import org.thingsboard.server.common.adaptor.JsonConverter;
 import org.thingsboard.server.common.data.DeviceTransportType;
 import org.thingsboard.server.common.transport.TransportService;
 import org.thingsboard.server.common.transport.TransportServiceCallback;
@@ -29,8 +30,12 @@ import org.thingsboard.server.transport.tcp.TbTcpTransportComponent;
 import org.thingsboard.server.transport.tcp.TcpTransportContext;
 import org.thingsboard.server.transport.tcp.protocol.eelink.messages.EelinkLoginRequest;
 import org.thingsboard.server.transport.tcp.protocol.eelink.messages.EelinkLoginResponse;
+import org.thingsboard.server.transport.tcp.protocol.eelink.messages.EelinkHeartbeatRequest;
+import org.thingsboard.server.transport.tcp.protocol.eelink.messages.EelinkHeartbeatResponse;
 import org.thingsboard.server.transport.tcp.session.TcpDeviceSessionContext;
 
+import java.time.LocalDateTime;
+import java.time.temporal.ChronoUnit;
 import java.util.UUID;
 
 import static org.thingsboard.server.common.transport.service.DefaultTransportService.SESSION_EVENT_MSG_OPEN;
@@ -161,6 +166,161 @@ public class EelinkMessageHandler {
                     EelinkLoginResponse.ERROR_DATA_INVALID);
             ctx.writeAndFlush(response.encode(ctx.alloc()));
             ctx.close();
+        }
+    }
+    
+    /**
+     * 处理设备心跳请求（帧代号0x43）
+     * 
+     * @param ctx Netty上下文
+     * @param frame Eelink帧
+     * @param context TCP传输上下文
+     * @param deviceSessionCtx 设备会话上下文
+     * @param sessionId 会话ID
+     */
+    public void handleHeartbeatRequest(ChannelHandlerContext ctx,
+                                       EelinkFrame frame,
+                                       TcpTransportContext context,
+                                       TcpDeviceSessionContext deviceSessionCtx,
+                                       UUID sessionId) {
+        
+        log.debug("[{}] Processing Eelink heartbeat request from device", sessionId);
+        
+        try {
+            // 检查设备是否已登录
+            if (deviceSessionCtx.getSessionInfo() == null) {
+                log.warn("[{}] Heartbeat received but device not logged in", sessionId);
+                EelinkHeartbeatResponse response = EelinkHeartbeatResponse.error(
+                        frame.getAddress(),
+                        frame.getFunctionCode1(),
+                        EelinkHeartbeatResponse.ERROR_NOT_REGISTERED);
+                ctx.writeAndFlush(response.encode(ctx.alloc()));
+                return;
+            }
+            
+            // 解析心跳请求
+            EelinkHeartbeatRequest request = EelinkHeartbeatRequest.parse(frame.getData());
+            
+            if (request.isLinkHeartbeat()) {
+                // 链路心跳
+                log.debug("[{}] Link heartbeat received", sessionId);
+                
+                // 更新设备在线状态
+                context.getTransportService().recordActivity(deviceSessionCtx.getSessionInfo());
+                
+                // 发送链路心跳响应
+                EelinkHeartbeatResponse response = EelinkHeartbeatResponse.linkSuccess(
+                        frame.getAddress(),
+                        frame.getFunctionCode1());
+                ctx.writeAndFlush(response.encode(ctx.alloc()));
+                
+            } else if (request.isStatusHeartbeat()) {
+                // 状态心跳
+                log.info("[{}] Status heartbeat: mode={}, time={}, report={}s, collect={}s, " +
+                        "storage={}s, signal={}, stored={}, unreported={}, battery={}V",
+                        sessionId,
+                        request.getConnectionMode(),
+                        request.getDeviceTime(),
+                        request.getReportPeriod(),
+                        request.getCollectPeriod(),
+                        request.getStoragePeriod(),
+                        request.getSignalStrength() & 0xFF,
+                        request.getStoredDataCount(),
+                        request.getUnreportedCount(),
+                        request.getBatteryVoltage());
+                
+                // 更新设备在线状态
+                context.getTransportService().recordActivity(deviceSessionCtx.getSessionInfo());
+                
+                // 发送设备状态遥测数据到ThingsBoard
+                sendHeartbeatTelemetry(request, deviceSessionCtx, context);
+                
+                // 检查是否需要时间同步（时间差大于1分钟）
+                LocalDateTime deviceTime = request.getDeviceTime();
+                LocalDateTime currentTime = LocalDateTime.now();
+                long timeDiffMinutes = Math.abs(ChronoUnit.MINUTES.between(deviceTime, currentTime));
+                
+                EelinkHeartbeatResponse response;
+                if (timeDiffMinutes > 1) {
+                    // 需要时间同步
+                    log.info("[{}] Time sync required: device={}, platform={}, diff={}min",
+                            sessionId, deviceTime, currentTime, timeDiffMinutes);
+                    response = EelinkHeartbeatResponse.statusSuccessWithTimeSync(
+                            frame.getAddress(),
+                            frame.getFunctionCode1(),
+                            currentTime);
+                } else {
+                    // 无需同步
+                    response = EelinkHeartbeatResponse.statusSuccess(
+                            frame.getAddress(),
+                            frame.getFunctionCode1());
+                }
+                
+                ctx.writeAndFlush(response.encode(ctx.alloc()));
+                
+            } else {
+                log.warn("[{}] Unknown heartbeat type: {}", sessionId, request.getHeartbeatType());
+                EelinkHeartbeatResponse response = EelinkHeartbeatResponse.error(
+                        frame.getAddress(),
+                        frame.getFunctionCode1(),
+                        EelinkHeartbeatResponse.ERROR_DATA_INVALID);
+                ctx.writeAndFlush(response.encode(ctx.alloc()));
+            }
+            
+        } catch (Exception e) {
+            log.error("[{}] Failed to process heartbeat request", sessionId, e);
+            EelinkHeartbeatResponse response = EelinkHeartbeatResponse.error(
+                    frame.getAddress(),
+                    frame.getFunctionCode1(),
+                    EelinkHeartbeatResponse.ERROR_DATA_INVALID);
+            ctx.writeAndFlush(response.encode(ctx.alloc()));
+        }
+    }
+    
+    /**
+     * 发送心跳客户端属性到ThingsBoard
+     */
+    private void sendHeartbeatTelemetry(EelinkHeartbeatRequest request,
+                                        TcpDeviceSessionContext deviceSessionCtx,
+                                        TcpTransportContext context) {
+        try {
+            // 构建客户端属性JSON
+            StringBuilder attributesJson = new StringBuilder("{");
+            attributesJson.append("\"connectionMode\":").append(request.getConnectionMode()).append(",");
+            attributesJson.append("\"deviceTime\":\"").append(request.getDeviceTime()).append("\",");
+            attributesJson.append("\"reportPeriod\":").append(request.getReportPeriod()).append(",");
+            attributesJson.append("\"collectPeriod\":").append(request.getCollectPeriod()).append(",");
+            attributesJson.append("\"storagePeriod\":").append(request.getStoragePeriod()).append(",");
+            attributesJson.append("\"signalStrength\":").append(request.getSignalStrength() & 0xFF).append(",");
+            attributesJson.append("\"storedDataCount\":").append(request.getStoredDataCount()).append(",");
+            attributesJson.append("\"unreportedCount\":").append(request.getUnreportedCount()).append(",");
+            attributesJson.append("\"batteryVoltage\":").append(request.getBatteryVoltage());
+            attributesJson.append("}");
+
+            log.debug("Sending heartbeat client attributes: {}", attributesJson);
+
+            // 将JSON字符串转换为PostAttributeMsg
+            TransportProtos.PostAttributeMsg postAttributesMsg = 
+                    JsonConverter.convertToAttributesProto(JsonParser.parseString(attributesJson.toString()));
+            
+            // 通过TransportService发送客户端属性
+            context.getTransportService().process(
+                    deviceSessionCtx.getSessionInfo(), 
+                    postAttributesMsg,
+                    new TransportServiceCallback<Void>() {
+                        @Override
+                        public void onSuccess(Void msg) {
+                            log.debug("Successfully saved heartbeat client attributes");
+                        }
+                        
+                        @Override
+                        public void onError(Throwable e) {
+                            log.error("Failed to save heartbeat client attributes", e);
+                        }
+                    });
+            
+        } catch (Exception e) {
+            log.error("Failed to send heartbeat client attributes", e);
         }
     }
 }

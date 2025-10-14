@@ -129,7 +129,7 @@ public class TcpTransportHandler extends ChannelInboundHandlerAdapter implements
                 break;
                 
             case 0x43:  // 设备心跳
-                log.info("[{}] Eelink heartbeat - not implemented yet", sessionId);
+                handleEelinkHeartbeat(ctx, frame);
                 break;
                 
             case 0x46:  // 数据上报
@@ -153,6 +153,20 @@ public class TcpTransportHandler extends ChannelInboundHandlerAdapter implements
                                    org.thingsboard.server.transport.tcp.protocol.eelink.EelinkFrame frame) {
         if (context.getEelinkMessageHandler() != null) {
             context.getEelinkMessageHandler().handleLoginRequest(
+                    ctx, frame, context, deviceSessionCtx, sessionId);
+        } else {
+            log.error("[{}] EelinkMessageHandler not available", sessionId);
+            ctx.close();
+        }
+    }
+    
+    /**
+     * 处理Eelink设备心跳
+     */
+    private void handleEelinkHeartbeat(ChannelHandlerContext ctx, 
+                                       org.thingsboard.server.transport.tcp.protocol.eelink.EelinkFrame frame) {
+        if (context.getEelinkMessageHandler() != null) {
+            context.getEelinkMessageHandler().handleHeartbeatRequest(
                     ctx, frame, context, deviceSessionCtx, sessionId);
         } else {
             log.error("[{}] EelinkMessageHandler not available", sessionId);
