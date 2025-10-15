@@ -187,17 +187,6 @@ public class EelinkMessageHandler {
         log.debug("[{}] Processing Eelink heartbeat request from device", sessionId);
         
         try {
-            // 检查设备是否已登录
-            if (deviceSessionCtx.getSessionInfo() == null) {
-                log.warn("[{}] Heartbeat received but device not logged in", sessionId);
-                EelinkHeartbeatResponse response = EelinkHeartbeatResponse.error(
-                        frame.getAddress(),
-                        frame.getFunctionCode1(),
-                        EelinkHeartbeatResponse.ERROR_NOT_REGISTERED);
-                ctx.writeAndFlush(response.encode(ctx.alloc()));
-                return;
-            }
-            
             // 解析心跳请求
             EelinkHeartbeatRequest request = EelinkHeartbeatRequest.parse(frame.getData());
             

@@ -122,8 +122,18 @@ public class TcpTransportHandler extends ChannelInboundHandlerAdapter implements
         log.info("[{}] Processing Eelink frame, frameCode=0x{}", 
                 sessionId, Integer.toHexString(frame.getFrameCode() & 0xFF));
         
+        // 强制规则：登录包(0x41)必须是第一个包，验证通过后才会处理后续包
+        byte frameCode = frame.getFrameCode();
+        if (frameCode != 0x41 && !isEelinkDeviceAuthenticated()) {
+            log.warn("[{}] Received packet (frameCode: 0x{}) but device has not completed login authentication. " +
+                    "Login packet (0x41) must be the first packet!", 
+                    sessionId, String.format("%02X", frameCode & 0xFF));
+            ctx.close();  // 关闭连接，强制设备重新登录
+            return;
+        }
+        
         // 根据帧代号分发消息
-        switch (frame.getFrameCode()) {
+        switch (frameCode) {
             case 0x41:  // 设备登陆
                 handleEelinkLogin(ctx, frame);
                 break;
@@ -142,8 +152,33 @@ public class TcpTransportHandler extends ChannelInboundHandlerAdapter implements
                 
             default:
                 log.warn("[{}] Unknown Eelink frame code: 0x{}", 
-                        sessionId, Integer.toHexString(frame.getFrameCode() & 0xFF));
+                        sessionId, Integer.toHexString(frameCode & 0xFF));
         }
+    }
+    
+    /**
+     * 检查Eelink设备是否已完成认证
+     * 此方法用于确保登录包是第一个包，只有认证通过后才能处理其他类型的包
+     * 
+     * @return true表示已认证，false表示未认证
+     */
+    private boolean isEelinkDeviceAuthenticated() {
+        // 检查会话信息是否已设置（登录成功后会设置）
+        if (deviceSessionCtx.getSessionInfo() == null) {
+            return false;
+        }
+        
+        // 检查连接状态是否已标记为已连接（登录成功后会设置为true）
+        if (!deviceSessionCtx.isConnected()) {
+            return false;
+        }
+        
+        // 检查设备信息是否已设置
+        if (deviceSessionCtx.getDeviceInfo() == null) {
+            return false;
+        }
+        
+        return true;
     }
     
     /**
