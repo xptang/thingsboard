@@ -38,6 +38,7 @@ import org.thingsboard.server.common.transport.service.SessionMetaData;
 import org.thingsboard.server.gen.transport.TransportProtos;
 import org.thingsboard.server.transport.tcp.adaptors.TcpTransportAdaptor;
 import org.thingsboard.server.transport.tcp.session.TcpDeviceSessionContext;
+import org.thingsboard.server.transport.tcp.protocol.eelink.EelinkFrame;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
@@ -93,9 +94,9 @@ public class TcpTransportHandler extends ChannelInboundHandlerAdapter implements
         }
         
         try {
-            if (useBinaryProtocol && msg instanceof org.thingsboard.server.transport.tcp.protocol.eelink.EelinkFrame) {
+            if (useBinaryProtocol && msg instanceof EelinkFrame) {
                 // 处理Eelink二进制协议消息
-                processEelinkFrame(ctx, (org.thingsboard.server.transport.tcp.protocol.eelink.EelinkFrame) msg);
+                processEelinkFrame(ctx, (EelinkFrame) msg);
             } else if (msg instanceof ByteBuf) {
                 // 处理字符串协议消息
                 ByteBuf byteBuf = (ByteBuf) msg;
@@ -118,7 +119,7 @@ public class TcpTransportHandler extends ChannelInboundHandlerAdapter implements
      * 处理Eelink二进制协议帧
      */
     private void processEelinkFrame(ChannelHandlerContext ctx, 
-                                    org.thingsboard.server.transport.tcp.protocol.eelink.EelinkFrame frame) {
+                                    EelinkFrame frame) {
         log.info("[{}] Processing Eelink frame, frameCode=0x{}", 
                 sessionId, Integer.toHexString(frame.getFrameCode() & 0xFF));
         
@@ -147,7 +148,7 @@ public class TcpTransportHandler extends ChannelInboundHandlerAdapter implements
                 break;
                 
             case 0x42:  // 警情上报
-                log.info("[{}] Eelink alarm report - not implemented yet", sessionId);
+                handleEelinkAlarm(ctx, frame);
                 break;
                 
             default:
@@ -185,7 +186,7 @@ public class TcpTransportHandler extends ChannelInboundHandlerAdapter implements
      * 处理Eelink设备登陆
      */
     private void handleEelinkLogin(ChannelHandlerContext ctx, 
-                                   org.thingsboard.server.transport.tcp.protocol.eelink.EelinkFrame frame) {
+                                   EelinkFrame frame) {
         if (context.getEelinkMessageHandler() != null) {
             context.getEelinkMessageHandler().handleLoginRequest(
                     ctx, frame, context, deviceSessionCtx, sessionId);
@@ -199,9 +200,23 @@ public class TcpTransportHandler extends ChannelInboundHandlerAdapter implements
      * 处理Eelink设备心跳
      */
     private void handleEelinkHeartbeat(ChannelHandlerContext ctx, 
-                                       org.thingsboard.server.transport.tcp.protocol.eelink.EelinkFrame frame) {
+                                       EelinkFrame frame) {
         if (context.getEelinkMessageHandler() != null) {
             context.getEelinkMessageHandler().handleHeartbeatRequest(
+                    ctx, frame, context, deviceSessionCtx, sessionId);
+        } else {
+            log.error("[{}] EelinkMessageHandler not available", sessionId);
+            ctx.close();
+        }
+    }
+    
+    /**
+     * 处理Eelink设备警情上报
+     */
+    private void handleEelinkAlarm(ChannelHandlerContext ctx,
+                                   EelinkFrame frame) {
+        if (context.getEelinkMessageHandler() != null) {
+            context.getEelinkMessageHandler().handleAlarmReport(
                     ctx, frame, context, deviceSessionCtx, sessionId);
         } else {
             log.error("[{}] EelinkMessageHandler not available", sessionId);

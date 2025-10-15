@@ -32,6 +32,8 @@ import org.thingsboard.server.transport.tcp.protocol.eelink.messages.EelinkLogin
 import org.thingsboard.server.transport.tcp.protocol.eelink.messages.EelinkLoginResponse;
 import org.thingsboard.server.transport.tcp.protocol.eelink.messages.EelinkHeartbeatRequest;
 import org.thingsboard.server.transport.tcp.protocol.eelink.messages.EelinkHeartbeatResponse;
+import org.thingsboard.server.transport.tcp.protocol.eelink.messages.EelinkAlarmRequest;
+import org.thingsboard.server.transport.tcp.protocol.eelink.messages.EelinkAlarmResponse;
 import org.thingsboard.server.transport.tcp.session.TcpDeviceSessionContext;
 
 import java.time.LocalDateTime;
@@ -310,6 +312,51 @@ public class EelinkMessageHandler {
             
         } catch (Exception e) {
             log.error("Failed to send heartbeat client attributes", e);
+        }
+    }
+    
+    /**
+     * 处理设备警情上报（帧代号0x42）
+     * 
+     * @param ctx Netty上下文
+     * @param frame Eelink帧
+     * @param context TCP传输上下文
+     * @param deviceSessionCtx 设备会话上下文
+     * @param sessionId 会话ID
+     */
+    public void handleAlarmReport(ChannelHandlerContext ctx,
+                                  EelinkFrame frame,
+                                  TcpTransportContext context,
+                                  TcpDeviceSessionContext deviceSessionCtx,
+                                  UUID sessionId) {
+        
+        log.info("[{}] Processing Eelink alarm report from device", sessionId);
+        
+        try {
+            // 解析警情上报请求
+            EelinkAlarmRequest request = EelinkAlarmRequest.parse(frame.getData());
+            
+            log.warn("[{}] ALARM REPORT: Type={}, Time={}, DeviceAddr={}", 
+                    sessionId,
+                    request.getAlarmTypeName(),
+                    request.getAlarmTime(),
+                    request.getAlarmDeviceAddressString());
+                        
+            // 更新设备活动状态
+            // context.getTransportService().recordActivity(deviceSessionCtx.getSessionInfo());
+                        
+            // 发送成功响应
+            EelinkAlarmResponse response = EelinkAlarmResponse.success(frame.getAddress());
+            ctx.writeAndFlush(response.encode(ctx.alloc()));
+            
+            log.info("[{}] Alarm report processed successfully", sessionId);
+            
+        } catch (Exception e) {
+            log.error("[{}] Failed to process alarm report", sessionId, e);
+            EelinkAlarmResponse response = EelinkAlarmResponse.error(
+                    frame.getAddress(),
+                    EelinkAlarmResponse.ERROR_DATA_INVALID);
+            ctx.writeAndFlush(response.encode(ctx.alloc()));
         }
     }
 }
