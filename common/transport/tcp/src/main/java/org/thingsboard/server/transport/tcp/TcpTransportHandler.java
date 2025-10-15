@@ -64,6 +64,7 @@ public class TcpTransportHandler extends ChannelInboundHandlerAdapter implements
 
     private volatile InetSocketAddress address;
     private volatile boolean authenticated = false;
+    private volatile String loginDeviceAddress = null;  // 登录时使用的设备地址（ACCESS TOKEN）
 
     public TcpTransportHandler(TcpTransportContext context, SslHandler sslHandler, boolean useBinaryProtocol) {
         this.sessionId = UUID.randomUUID();
@@ -120,17 +121,34 @@ public class TcpTransportHandler extends ChannelInboundHandlerAdapter implements
      */
     private void processEelinkFrame(ChannelHandlerContext ctx, 
                                     EelinkFrame frame) {
-        log.info("[{}] Processing Eelink frame, frameCode=0x{}", 
-                sessionId, Integer.toHexString(frame.getFrameCode() & 0xFF));
+        byte frameCode = frame.getFrameCode();
+        String deviceAddress = frame.getAddressString();
+        
+        log.info("[{}] Processing Eelink frame, frameCode=0x{}, deviceAddr={}", 
+                sessionId, 
+                String.format("%02X", frameCode & 0xFF),
+                deviceAddress);
         
         // 强制规则：登录包(0x41)必须是第一个包，验证通过后才会处理后续包
-        byte frameCode = frame.getFrameCode();
-        if (frameCode != 0x41 && !isEelinkDeviceAuthenticated()) {
-            log.warn("[{}] Received packet (frameCode: 0x{}) but device has not completed login authentication. " +
-                    "Login packet (0x41) must be the first packet!", 
-                    sessionId, String.format("%02X", frameCode & 0xFF));
-            ctx.close();  // 关闭连接，强制设备重新登录
-            return;
+        if (frameCode != 0x41) {
+            // 检查是否已认证
+            if (!isEelinkDeviceAuthenticated()) {
+                log.warn("[{}] Received packet (frameCode: 0x{}, deviceAddr: {}) but device has not completed login authentication. " +
+                        "Login packet (0x41) must be the first packet!", 
+                        sessionId, String.format("%02X", frameCode & 0xFF), deviceAddress);
+                ctx.close();  // 关闭连接，强制设备重新登录
+                return;
+            }
+            
+            // 检查设备地址是否匹配（非登录包必须使用已认证设备的地址）
+            String authenticatedDeviceAddress = getAuthenticatedDeviceAddress();
+            if (authenticatedDeviceAddress != null && !authenticatedDeviceAddress.equals(deviceAddress)) {
+                log.warn("[{}] Device address mismatch! Authenticated device: {}, Current packet: {}. " +
+                        "All packets in a session must come from the same device!", 
+                        sessionId, authenticatedDeviceAddress, deviceAddress);
+                ctx.close();  // 关闭连接，地址不匹配
+                return;
+            }
         }
         
         // 根据帧代号分发消息
@@ -144,7 +162,7 @@ public class TcpTransportHandler extends ChannelInboundHandlerAdapter implements
                 break;
                 
             case 0x46:  // 数据上报
-                log.info("[{}] Eelink data report - not implemented yet", sessionId);
+                handleEelinkDataReport(ctx, frame);
                 break;
                 
             case 0x42:  // 警情上报
@@ -183,11 +201,30 @@ public class TcpTransportHandler extends ChannelInboundHandlerAdapter implements
     }
     
     /**
+     * 获取已认证设备的地址
+     * 返回登录时使用的设备地址（ACCESS TOKEN）
+     * 
+     * @return 已认证设备的地址，如果未认证则返回null
+     */
+    private String getAuthenticatedDeviceAddress() {
+        if (!isEelinkDeviceAuthenticated()) {
+            return null;
+        }
+        
+        // 返回登录时保存的设备地址（ACCESS TOKEN）
+        return loginDeviceAddress;
+    }
+    
+    /**
      * 处理Eelink设备登陆
      */
     private void handleEelinkLogin(ChannelHandlerContext ctx, 
                                    EelinkFrame frame) {
         if (context.getEelinkMessageHandler() != null) {
+            // 保存登录时使用的设备地址（ACCESS TOKEN）
+            loginDeviceAddress = frame.getAddressString();
+            log.debug("[{}] Login device address saved: {}", sessionId, loginDeviceAddress);
+            
             context.getEelinkMessageHandler().handleLoginRequest(
                     ctx, frame, context, deviceSessionCtx, sessionId);
         } else {
@@ -217,6 +254,20 @@ public class TcpTransportHandler extends ChannelInboundHandlerAdapter implements
                                    EelinkFrame frame) {
         if (context.getEelinkMessageHandler() != null) {
             context.getEelinkMessageHandler().handleAlarmReport(
+                    ctx, frame, context, deviceSessionCtx, sessionId);
+        } else {
+            log.error("[{}] EelinkMessageHandler not available", sessionId);
+            ctx.close();
+        }
+    }
+    
+    /**
+     * 处理Eelink设备数据上报
+     */
+    private void handleEelinkDataReport(ChannelHandlerContext ctx,
+                                       EelinkFrame frame) {
+        if (context.getEelinkMessageHandler() != null) {
+            context.getEelinkMessageHandler().handleDataReport(
                     ctx, frame, context, deviceSessionCtx, sessionId);
         } else {
             log.error("[{}] EelinkMessageHandler not available", sessionId);

@@ -34,6 +34,9 @@ import org.thingsboard.server.transport.tcp.protocol.eelink.messages.EelinkHeart
 import org.thingsboard.server.transport.tcp.protocol.eelink.messages.EelinkHeartbeatResponse;
 import org.thingsboard.server.transport.tcp.protocol.eelink.messages.EelinkAlarmRequest;
 import org.thingsboard.server.transport.tcp.protocol.eelink.messages.EelinkAlarmResponse;
+import org.thingsboard.server.transport.tcp.protocol.eelink.messages.EelinkDataReportRequest;
+import org.thingsboard.server.transport.tcp.protocol.eelink.messages.EelinkDataReportResponse;
+import org.thingsboard.server.transport.tcp.protocol.eelink.messages.EelinkDataPacket;
 import org.thingsboard.server.transport.tcp.session.TcpDeviceSessionContext;
 
 import java.time.LocalDateTime;
@@ -66,7 +69,8 @@ public class EelinkMessageHandler {
                                    TcpDeviceSessionContext deviceSessionCtx,
                                    UUID sessionId) {
         
-        log.info("[{}] Processing Eelink login request from device", sessionId);
+        log.info("[{}] Processing Eelink login request from device, address={}", 
+                sessionId, frame.getAddressString());
         
         try {
             // 解析登陆请求（直接从frame的data字段获取）
@@ -186,7 +190,8 @@ public class EelinkMessageHandler {
                                        TcpDeviceSessionContext deviceSessionCtx,
                                        UUID sessionId) {
         
-        log.debug("[{}] Processing Eelink heartbeat request from device", sessionId);
+        log.debug("[{}] Processing Eelink heartbeat request from device, address={}", 
+                sessionId, frame.getAddressString());
         
         try {
             // 解析心跳请求
@@ -330,7 +335,8 @@ public class EelinkMessageHandler {
                                   TcpDeviceSessionContext deviceSessionCtx,
                                   UUID sessionId) {
         
-        log.info("[{}] Processing Eelink alarm report from device", sessionId);
+        log.info("[{}] Processing Eelink alarm report from device, address={}", 
+                sessionId, frame.getAddressString());
         
         try {
             // 解析警情上报请求
@@ -357,6 +363,191 @@ public class EelinkMessageHandler {
                     frame.getAddress(),
                     EelinkAlarmResponse.ERROR_DATA_INVALID);
             ctx.writeAndFlush(response.encode(ctx.alloc()));
+        }
+    }
+    
+    /**
+     * 处理设备数据上报（帧代号0x46）
+     * 
+     * @param ctx Netty上下文
+     * @param frame Eelink帧
+     * @param context TCP传输上下文
+     * @param deviceSessionCtx 设备会话上下文
+     * @param sessionId 会话ID
+     */
+    public void handleDataReport(ChannelHandlerContext ctx,
+                                 EelinkFrame frame,
+                                 TcpTransportContext context,
+                                 TcpDeviceSessionContext deviceSessionCtx,
+                                 UUID sessionId) {
+        
+        log.info("[{}] Processing Eelink data report from device, address={}", 
+                sessionId, frame.getAddressString());
+        
+        try {
+            // 解析数据上报请求
+            EelinkDataReportRequest request = EelinkDataReportRequest.parse(frame.getData());
+            
+            log.info("[{}] DATA REPORT: encrypted={}, packetCount={}, totalChannels={}", 
+                    sessionId,
+                    request.isEncrypted(),
+                    request.getPacketCount(),
+                    request.getTotalChannelCount());
+            
+            // 检查是否为加密数据（当前不支持）
+            if (request.isEncrypted()) {
+                log.warn("[{}] Encrypted data not supported", sessionId);
+                EelinkDataReportResponse response = EelinkDataReportResponse.error(
+                        frame.getAddress(),
+                        EelinkDataReportResponse.ERROR_CHANNEL_DATA_INVALID);
+                ctx.writeAndFlush(response.encode(ctx.alloc()));
+                return;
+            }
+            
+            // 处理所有数据包
+            for (int i = 0; i < request.getPacketCount(); i++) {
+                EelinkDataPacket packet = request.getDataPackets().get(i);
+                
+                log.info("[{}] Data packet {}: time={}, channels={}, addr={}, storage={}/{}", 
+                        sessionId,
+                        i + 1,
+                        packet.getCollectTime(),
+                        packet.getChannelCount(),
+                        packet.getDataAddressString(),
+                        packet.getStorageTypeName(),
+                        packet.getStorageSequence());
+                
+                // 发送数据包遥测数据到ThingsBoard
+                sendDataPacketTelemetry(packet, deviceSessionCtx, context);
+            }
+            
+            // 更新设备活动状态
+            context.getTransportService().recordActivity(deviceSessionCtx.getSessionInfo());
+            
+            // 发送成功响应
+            EelinkDataReportResponse response = EelinkDataReportResponse.success(frame.getAddress());
+            ctx.writeAndFlush(response.encode(ctx.alloc()));
+            
+            log.info("[{}] Data report processed successfully: {} packets", sessionId, request.getPacketCount());
+            
+        } catch (Exception e) {
+            log.error("[{}] Failed to process data report", sessionId, e);
+            EelinkDataReportResponse response = EelinkDataReportResponse.error(
+                    frame.getAddress(),
+                    EelinkDataReportResponse.ERROR_CHANNEL_DATA_INVALID);
+            ctx.writeAndFlush(response.encode(ctx.alloc()));
+        }
+    }
+    
+    /**
+     * 发送数据包遥测数据到ThingsBoard
+     */
+    private void sendDataPacketTelemetry(EelinkDataPacket packet,
+                                        TcpDeviceSessionContext deviceSessionCtx,
+                                        TcpTransportContext context) {
+        try {
+            // 构建遥测数据JSON
+            StringBuilder telemetryJson = new StringBuilder("{");
+            // telemetryJson.append("\"collectTime\":\"").append(packet.getCollectTime()).append("\",");
+            // telemetryJson.append("\"dataAddress\":\"").append(packet.getDataAddressString()).append("\",");
+            // telemetryJson.append("\"storageType\":\"").append(packet.getStorageTypeName()).append("\",");
+            // telemetryJson.append("\"storageSequence\":").append(packet.getStorageSequence()).append(",");
+            
+            // 添加通道数据（使用通道索引作为键名）
+            // 按远程测控终端协议定义将通道序号映射为具体点位含义
+            // 0-压力, 1-水位, 2-阀门电压, 3-电池电压, 4-开关状态, 5-设备信息,
+            // 6-瞬时流量, 7-累计流量
+            // 8-阀门开度, 9-阀门开度2, 10-阀门开度3
+            String[] channelNames = {
+                "pressure",          // 0
+                "waterLevel",        // 1
+                "valveVoltage",      // 2
+                "batteryVoltage",    // 3
+                "switchStatus",      // 4
+                "deviceInfo",        // 5
+                "flowInstant",       // 6
+                "flowTotal",         // 7
+                "valveOpening1",     // 8
+                "valveOpening2",     // 9
+                "valveOpening3"      // 10
+            };
+
+            for (int i = 0; i < channelNames.length; i++) {
+                Float value = packet.getChannelData(i);
+                if (value == null) {
+                    break;
+                }
+
+                telemetryJson.append("\"").append(channelNames[i]).append("\":").append(value);
+                if (i < channelNames.length - 1) {
+                    telemetryJson.append(",");
+                }
+            }
+            
+            telemetryJson.append("}");
+
+            log.info("Sending data packet telemetry: {}", telemetryJson);
+
+            // 将JSON字符串转换为PostTelemetryMsg
+            TransportProtos.PostTelemetryMsg postTelemetryMsg = 
+                    JsonConverter.convertToTelemetryProto(JsonParser.parseString(telemetryJson.toString()));
+            
+            // 通过TransportService发送遥测数据
+            context.getTransportService().process(
+                    deviceSessionCtx.getSessionInfo(), 
+                    postTelemetryMsg,
+                    new TransportServiceCallback<Void>() {
+                        @Override
+                        public void onSuccess(Void msg) {
+                            log.debug("Successfully saved data packet telemetry");
+                        }
+                        
+                        @Override
+                        public void onError(Throwable e) {
+                            log.error("Failed to save data packet telemetry", e);
+                        }
+                    });
+            
+        } catch (Exception e) {
+            log.error("Failed to send data packet telemetry", e);
+        }
+    }
+    
+    /**
+     * 获取通道名称
+     * 
+     * 远程测控终端通道定义：
+     * 0-压力, 1-水位, 2-阀门电压, 3-电池电压, 4-开关状态, 5-设备信息,
+     * 6-瞬时流量, 7-累计流量, 8-阀门开度, 9-阀门开度2, 10-阀门开度3
+     * 
+     * 泵房通道定义（15通道）：
+     * 0-压力, 1-水位, 2-阀门电压, 3-开关状态, 4-设备信息, 5-瞬时流量, 6-累计流量,
+     * 7-A相电压, 8-B相电压, 9-C相电压, 10-A相电流, 11-B相电流, 12-C相电流,
+     * 13-电量, 14-电功率
+     */
+    private String getChannelName(int index) {
+        // 使用远程测控终端通道定义（支持更多设备类型）
+        switch (index) {
+            case 0: return "pressure";           // 压力
+            case 1: return "waterLevel";         // 水位
+            case 2: return "valveVoltage";       // 阀门电压
+            case 3: return "batteryVoltage";     // 电池电压
+            case 4: return "switchStatus";       // 开关状态
+            case 5: return "deviceInfo";         // 设备信息
+            case 6: return "instantFlow";        // 瞬时流量
+            case 7: return "totalFlow";          // 累计流量
+            case 8: return "valveOpening1";      // 阀门开度1
+            case 9: return "valveOpening2";      // 阀门开度2
+            case 10: return "valveOpening3";     // 阀门开度3
+            // 泵房专用通道（索引7-14）
+            case 11: return "voltageB";          // B相电压
+            case 12: return "voltageC";          // C相电压
+            case 13: return "currentA";          // A相电流
+            case 14: return "currentB";          // B相电流
+            case 15: return "currentC";          // C相电流
+            case 16: return "electricEnergy";    // 电量
+            case 17: return "electricPower";     // 电功率
+            default: return "channel" + index;   // 通道N
         }
     }
 }
