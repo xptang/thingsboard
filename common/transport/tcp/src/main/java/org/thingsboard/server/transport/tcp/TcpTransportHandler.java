@@ -118,6 +118,7 @@ public class TcpTransportHandler extends ChannelInboundHandlerAdapter implements
     
     /**
      * 处理Eelink二进制协议帧
+     * 所有包都会触发认证检查，认证凭证是设备地址
      */
     private void processEelinkFrame(ChannelHandlerContext ctx, 
                                     EelinkFrame frame) {
@@ -128,27 +129,42 @@ public class TcpTransportHandler extends ChannelInboundHandlerAdapter implements
                 sessionId, 
                 String.format("%02X", frameCode & 0xFF),
                 deviceAddress);
+
+        // 检查是否已认证
+        if (!isEelinkDeviceAuthenticated()) {
+            // 未认证，触发认证流程（异步），认证成功后会在回调中处理消息
+            log.info("[{}] Device not authenticated, triggering authentication for address: {}", 
+                    sessionId, deviceAddress);
+            context.getEelinkMessageHandler().authenticateDevice(
+                    ctx, frame, context, deviceSessionCtx, sessionId, 
+                    frameCode);  // 传入frameCode，认证成功后继续处理
+            return;  // 认证是异步的，在回调中继续处理
+        }
         
-        // 强制规则：登录包(0x41)必须是第一个包，验证通过后才会处理后续包
-        if (frameCode != 0x41) {
-            // 检查是否已认证
-            if (!isEelinkDeviceAuthenticated()) {
-                log.warn("[{}] Received packet (frameCode: 0x{}, deviceAddr: {}) but device has not completed login authentication. " +
-                        "Login packet (0x41) must be the first packet!", 
-                        sessionId, String.format("%02X", frameCode & 0xFF), deviceAddress);
-                ctx.close();  // 关闭连接，强制设备重新登录
-                return;
-            }
-            
-            // 检查设备地址是否匹配（非登录包必须使用已认证设备的地址）
-            String authenticatedDeviceAddress = getAuthenticatedDeviceAddress();
-            if (authenticatedDeviceAddress != null && !authenticatedDeviceAddress.equals(deviceAddress)) {
-                log.warn("[{}] Device address mismatch! Authenticated device: {}, Current packet: {}. " +
-                        "All packets in a session must come from the same device!", 
-                        sessionId, authenticatedDeviceAddress, deviceAddress);
-                ctx.close();  // 关闭连接，地址不匹配
-                return;
-            }
+        // 已认证，检查设备地址是否匹配
+        String authenticatedDeviceAddress = getAuthenticatedDeviceAddress();
+        if (authenticatedDeviceAddress != null && !authenticatedDeviceAddress.equals(deviceAddress)) {
+            log.warn("[{}] Device address mismatch! Authenticated device: {}, Current packet: {}. " +
+                    "All packets in a session must come from the same device!", 
+                    sessionId, authenticatedDeviceAddress, deviceAddress);
+            ctx.close();  // 关闭连接，地址不匹配
+            return;
+        }
+        
+        // 已认证且地址匹配，分发消息
+        dispatchEelinkMessage(ctx, frame, frameCode);
+    }
+    
+    /**
+     * 分发Eelink消息到具体的处理方法
+     */
+    private void dispatchEelinkMessage(ChannelHandlerContext ctx, 
+                                      EelinkFrame frame,
+                                      byte frameCode) {
+        // 确保登录设备地址已保存（用于后续地址匹配检查）
+        if (loginDeviceAddress == null) {
+            loginDeviceAddress = frame.getAddressString();
+            log.debug("[{}] Device address saved: {}", sessionId, loginDeviceAddress);
         }
         
         // 根据帧代号分发消息
@@ -211,7 +227,12 @@ public class TcpTransportHandler extends ChannelInboundHandlerAdapter implements
             return null;
         }
         
-        // 返回登录时保存的设备地址（ACCESS TOKEN）
+        // 优先返回从 deviceSessionCtx 中保存的认证设备地址
+        if (deviceSessionCtx.getAuthenticatedDeviceAddress() != null) {
+            return deviceSessionCtx.getAuthenticatedDeviceAddress();
+        }
+        
+        // 其次返回保存的登录设备地址
         return loginDeviceAddress;
     }
     

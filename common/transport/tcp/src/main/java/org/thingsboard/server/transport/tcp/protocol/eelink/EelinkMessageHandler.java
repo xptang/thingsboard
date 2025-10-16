@@ -55,6 +55,166 @@ import static org.thingsboard.server.common.transport.service.DefaultTransportSe
 public class EelinkMessageHandler {
     
     /**
+     * 认证设备（使用地址作为认证凭证）
+     * 认证成功后会继续处理消息
+     * 
+     * @param ctx              Netty上下文
+     * @param frame            Eelink帧
+     * @param context          TCP传输上下文
+     * @param deviceSessionCtx 设备会话上下文
+     * @param sessionId        会话ID
+     * @param frameCode        帧代号，用于认证成功后继续处理
+     */
+    public void authenticateDevice(ChannelHandlerContext ctx,
+                                   EelinkFrame frame,
+                                   TcpTransportContext context,
+                                   TcpDeviceSessionContext deviceSessionCtx,
+                                   UUID sessionId,
+                                   byte frameCode) {
+
+        try {
+            // 使用地址作为设备标识进行认证
+            String deviceToken = frame.getAddressString();
+            log.info("[{}] Authenticating device with address: {}", sessionId, deviceToken);
+
+            // 构建认证请求
+            TransportProtos.ValidateBasicMqttCredRequestMsg.Builder authRequest = TransportProtos.ValidateBasicMqttCredRequestMsg
+                    .newBuilder()
+                    .setClientId(sessionId.toString())
+                    .setUserName(deviceToken); // 使用地址作为用户名
+
+            TransportService transportService = context.getTransportService();
+
+            // 发送认证请求
+            transportService.process(DeviceTransportType.DEFAULT, authRequest.build(),
+                    new TransportServiceCallback<>() {
+                        @Override
+                        public void onSuccess(ValidateDeviceCredentialsResponse msg) {
+                            if (!msg.hasDeviceInfo()) {
+                                // 认证失败
+                                log.warn("[{}] Device authentication failed for Address: {}", sessionId, deviceToken);
+                                sendErrorResponse(ctx, frame, frameCode);
+                                ctx.close();
+                            } else {
+                                // 认证成功
+                                log.info("[{}] Device authenticated successfully: {}",
+                                        sessionId, msg.getDeviceInfo().getDeviceName());
+
+                                // 设置会话信息
+                                deviceSessionCtx.setDeviceInfo(msg.getDeviceInfo());
+                                deviceSessionCtx.setDeviceProfile(msg.getDeviceProfile());
+                                deviceSessionCtx.setSessionInfo(
+                                        SessionInfoCreator.create(msg, context, sessionId));
+
+                                // 发送SESSION_OPEN事件
+                                transportService.process(deviceSessionCtx.getSessionInfo(),
+                                        SESSION_EVENT_MSG_OPEN,
+                                        new TransportServiceCallback<Void>() {
+                                            @Override
+                                            public void onSuccess(Void v) {
+                                                // 注册会话
+                                                transportService.registerAsyncSession(
+                                                        deviceSessionCtx.getSessionInfo(),
+                                                        null); // 暂时不传SessionMsgListener
+
+                                                // 标记已连接
+                                                deviceSessionCtx.setConnected(true);
+                                                deviceSessionCtx.setChannel(ctx);
+
+                                                log.info("[{}] Device session opened successfully: {}",
+                                                        sessionId, msg.getDeviceInfo().getDeviceName());
+                                                
+                                                // 保存认证的设备地址
+                                                deviceSessionCtx.setAuthenticatedDeviceAddress(deviceToken);
+                                                log.debug("[{}] Authenticated device address saved: {}", sessionId, deviceToken);
+                                                
+                                                // 认证成功后，继续处理消息
+                                                processMessageAfterAuth(ctx, frame, context, deviceSessionCtx, sessionId, frameCode);
+                                            }
+
+                                            @Override
+                                            public void onError(Throwable e) {
+                                                log.error("[{}] Failed to open session", sessionId, e);
+                                                sendErrorResponse(ctx, frame, frameCode);
+                                                ctx.close();
+                                            }
+                                        });
+                            }
+                        }
+
+                        @Override
+                        public void onError(Throwable e) {
+                            log.error("[{}] Authentication service error", sessionId, e);
+                            sendErrorResponse(ctx, frame, frameCode);
+                            ctx.close();
+                        }
+                    });
+
+        } catch (Exception e) {
+            log.error("[{}] Failed to authenticate device", sessionId, e);
+            sendErrorResponse(ctx, frame, frameCode);
+            ctx.close();
+        }
+    }
+    
+    /**
+     * 认证成功后处理消息
+     */
+    private void processMessageAfterAuth(ChannelHandlerContext ctx,
+                                        EelinkFrame frame,
+                                        TcpTransportContext context,
+                                        TcpDeviceSessionContext deviceSessionCtx,
+                                        UUID sessionId,
+                                        byte frameCode) {
+        switch (frameCode) {
+            case 0x41:  // 设备登陆
+                handleLoginRequest(ctx, frame, context, deviceSessionCtx, sessionId);
+                break;
+            case 0x43:  // 设备心跳
+                handleHeartbeatRequest(ctx, frame, context, deviceSessionCtx, sessionId);
+                break;
+            case 0x46:  // 数据上报
+                handleDataReport(ctx, frame, context, deviceSessionCtx, sessionId);
+                break;
+            case 0x42:  // 警情上报
+                handleAlarmReport(ctx, frame, context, deviceSessionCtx, sessionId);
+                break;
+            default:
+                log.warn("[{}] Unknown frame code after authentication: 0x{}", 
+                        sessionId, String.format("%02X", frameCode & 0xFF));
+        }
+    }
+    
+    /**
+     * 发送错误响应
+     */
+    private void sendErrorResponse(ChannelHandlerContext ctx, EelinkFrame frame, byte frameCode) {
+        try {
+            switch (frameCode) {
+                case 0x41:  // 登陆
+                    ctx.writeAndFlush(EelinkLoginResponse.error(frame.getAddress(), 
+                            EelinkLoginResponse.ERROR_NOT_CONFIGURED).encode(ctx.alloc()));
+                    break;
+                case 0x43:  // 心跳
+                    ctx.writeAndFlush(EelinkHeartbeatResponse.error(frame.getAddress(), 
+                            frame.getFunctionCode1(), 
+                            EelinkHeartbeatResponse.ERROR_DATA_INVALID).encode(ctx.alloc()));
+                    break;
+                case 0x42:  // 警情
+                    ctx.writeAndFlush(EelinkAlarmResponse.error(frame.getAddress(), 
+                            EelinkAlarmResponse.ERROR_DATA_INVALID).encode(ctx.alloc()));
+                    break;
+                case 0x46:  // 数据上报
+                    ctx.writeAndFlush(EelinkDataReportResponse.error(frame.getAddress(), 
+                            EelinkDataReportResponse.ERROR_CHANNEL_DATA_INVALID).encode(ctx.alloc()));
+                    break;
+            }
+        } catch (Exception e) {
+            log.error("Failed to send error response", e);
+        }
+    }
+
+    /**
      * 处理设备登陆请求（帧代号0x41）
      * 
      * @param ctx Netty上下文
@@ -73,97 +233,10 @@ public class EelinkMessageHandler {
                 sessionId, frame.getAddressString());
         
         try {
-            // 解析登陆请求（直接从frame的data字段获取）
-            EelinkLoginRequest request = EelinkLoginRequest.parse(frame.getData());
-            
-            // 使用地址作为设备标识进行认证
-            String deviceToken = frame.getAddressString();// request.getImeiString();
-            log.info("[{}] Device Address: {}, Software: {}, Hardware: {}, ResetCount: {}", 
-                    sessionId,
-                    deviceToken,
-                    request.getSoftwareVersion(),
-                    request.getHardwareVersion(),
-                    request.getResetCount() & 0xFF);
-            
-            // 构建认证请求
-            TransportProtos.ValidateBasicMqttCredRequestMsg.Builder authRequest = 
-                    TransportProtos.ValidateBasicMqttCredRequestMsg.newBuilder()
-                    .setClientId(sessionId.toString())
-                    .setUserName(deviceToken);  // 使用地址作为用户名
-            
-            TransportService transportService = context.getTransportService();
-            
-            // 发送认证请求
-            transportService.process(DeviceTransportType.DEFAULT, authRequest.build(),
-                    new TransportServiceCallback<>() {
-                        @Override
-                        public void onSuccess(ValidateDeviceCredentialsResponse msg) {
-                            if (!msg.hasDeviceInfo()) {
-                                // 认证失败
-                                log.warn("[{}] Device authentication failed for Address: {}", sessionId, deviceToken);
-                                EelinkLoginResponse response = EelinkLoginResponse.error(
-                                        frame.getAddress(), 
-                                        EelinkLoginResponse.ERROR_NOT_CONFIGURED);
-                                ctx.writeAndFlush(response.encode(ctx.alloc()));
-                                ctx.close();
-                            } else {
-                                // 认证成功
-                                log.info("[{}] Device authenticated successfully: {}", 
-                                        sessionId, msg.getDeviceInfo().getDeviceName());
-                                
-                                // 设置会话信息
-                                deviceSessionCtx.setDeviceInfo(msg.getDeviceInfo());
-                                deviceSessionCtx.setDeviceProfile(msg.getDeviceProfile());
-                                deviceSessionCtx.setSessionInfo(
-                                        SessionInfoCreator.create(msg, context, sessionId));
-                                
-                                // 发送SESSION_OPEN事件
-                                transportService.process(deviceSessionCtx.getSessionInfo(), 
-                                        SESSION_EVENT_MSG_OPEN,
-                                        new TransportServiceCallback<Void>() {
-                                    @Override
-                                    public void onSuccess(Void v) {
-                                        // 注册会话
-                                        transportService.registerAsyncSession(
-                                                deviceSessionCtx.getSessionInfo(), 
-                                                null);  // 暂时不传SessionMsgListener
-                                        
-                                        // 发送成功响应
-                                        EelinkLoginResponse response = EelinkLoginResponse.success(
-                                                frame.getAddress());
-                                        ctx.writeAndFlush(response.encode(ctx.alloc()));
-                                        
-                                        // 标记已连接
-                                        deviceSessionCtx.setConnected(true);
-                                        deviceSessionCtx.setChannel(ctx);
-                                        
-                                        log.info("[{}] Eelink device login successful: {}", 
-                                                sessionId, msg.getDeviceInfo().getDeviceName());
-                                    }
-                                    
-                                    @Override
-                                    public void onError(Throwable e) {
-                                        log.error("[{}] Failed to open session", sessionId, e);
-                                        EelinkLoginResponse response = EelinkLoginResponse.error(
-                                                frame.getAddress(), 
-                                                EelinkLoginResponse.ERROR_DATA_INVALID);
-                                        ctx.writeAndFlush(response.encode(ctx.alloc()));
-                                        ctx.close();
-                                    }
-                                });
-                            }
-                        }
-                        
-                        @Override
-                        public void onError(Throwable e) {
-                            log.error("[{}] Authentication service error", sessionId, e);
-                            EelinkLoginResponse response = EelinkLoginResponse.error(
-                                    frame.getAddress(), 
-                                    EelinkLoginResponse.ERROR_DATA_INVALID);
-                            ctx.writeAndFlush(response.encode(ctx.alloc()));
-                            ctx.close();
-                        }
-                    });
+            // 发送成功响应
+            EelinkLoginResponse response = EelinkLoginResponse.success(
+                    frame.getAddress());
+            ctx.writeAndFlush(response.encode(ctx.alloc()));
             
         } catch (Exception e) {
             log.error("[{}] Failed to process login request", sessionId, e);
@@ -493,10 +566,10 @@ public class EelinkMessageHandler {
                     break;
                 }
 
-                telemetryJson.append("\"").append(channelNames[i]).append("\":").append(value);
-                if (i < channelNames.length - 1) {
+                if (i > 0) {
                     telemetryJson.append(",");
                 }
+                telemetryJson.append("\"").append(channelNames[i]).append("\":").append(value);
             }
             
             telemetryJson.append("}");

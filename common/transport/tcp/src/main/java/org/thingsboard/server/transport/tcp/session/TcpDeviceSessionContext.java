@@ -45,6 +45,7 @@ public class TcpDeviceSessionContext {
     private volatile DeviceProfile deviceProfile;
     private volatile TransportProtos.SessionInfoProto sessionInfo;
     private volatile boolean connected;
+    private volatile String authenticatedDeviceAddress;  // 认证的设备地址（用于Eelink协议）
 
     private final AtomicInteger msgIdCounter = new AtomicInteger(0);
 
