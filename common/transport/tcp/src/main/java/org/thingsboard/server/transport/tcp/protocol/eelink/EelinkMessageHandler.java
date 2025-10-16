@@ -453,11 +453,22 @@ public class EelinkMessageHandler {
             // telemetryJson.append("\"storageType\":\"").append(packet.getStorageTypeName()).append("\",");
             // telemetryJson.append("\"storageSequence\":").append(packet.getStorageSequence()).append(",");
             
-            // 添加通道数据（使用通道索引作为键名）
             // 按远程测控终端协议定义将通道序号映射为具体点位含义
-            // 0-压力, 1-水位, 2-阀门电压, 3-电池电压, 4-开关状态, 5-设备信息,
-            // 6-瞬时流量, 7-累计流量
-            // 8-阀门开度, 9-阀门开度2, 10-阀门开度3
+            // 压力
+            // 水位
+            // 阀门电压
+            // 电池电压
+            // 开关状态
+            // 设备信息
+            // 瞬时流量
+            // 累计流量
+            // 阀门开度
+            // 阀门开度2
+            // 阀门开度3
+            // 瞬时流量2
+            // 累计流量2
+            // 瞬时流量3
+            // 累计流量3
             String[] channelNames = {
                 "pressure",          // 0
                 "waterLevel",        // 1
@@ -465,11 +476,15 @@ public class EelinkMessageHandler {
                 "batteryVoltage",    // 3
                 "switchStatus",      // 4
                 "deviceInfo",        // 5
-                "flowInstant",       // 6
-                "flowTotal",         // 7
+                "instantFlow1",      // 6
+                "totalFlow1",        // 7
                 "valveOpening1",     // 8
                 "valveOpening2",     // 9
-                "valveOpening3"      // 10
+                "valveOpening3",     // 10
+                "instantFlow2",      // 11
+                "totalFlow2",        // 12
+                "instantFlow3",      // 13
+                "totalFlow3"         // 14
             };
 
             for (int i = 0; i < channelNames.length; i++) {

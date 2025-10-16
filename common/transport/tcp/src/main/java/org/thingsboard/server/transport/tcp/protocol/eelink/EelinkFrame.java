@@ -70,4 +70,11 @@ public class EelinkFrame {
     public String getAddressString() {
         return EelinkProtocolConfig.bytesToHex(address);
     }
+
+    /**
+     * 获取数据16进制字符串
+     */
+    public String getDataString() {
+        return EelinkProtocolConfig.bytesToHex(data);    
+    }
 }

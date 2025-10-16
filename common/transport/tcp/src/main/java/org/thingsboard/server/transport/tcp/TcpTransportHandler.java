@@ -170,8 +170,8 @@ public class TcpTransportHandler extends ChannelInboundHandlerAdapter implements
                 break;
                 
             default:
-                log.warn("[{}] Unknown Eelink frame code: 0x{}", 
-                        sessionId, Integer.toHexString(frameCode & 0xFF));
+                log.warn("[{}] Unknown Eelink frame code: 0x{} data: {}", 
+                        sessionId, Integer.toHexString(frameCode & 0xFF), frame.getDataString());
         }
     }
     
