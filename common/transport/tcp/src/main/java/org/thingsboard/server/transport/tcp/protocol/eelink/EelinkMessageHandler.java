@@ -21,6 +21,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 import org.thingsboard.server.common.adaptor.JsonConverter;
 import org.thingsboard.server.common.data.DeviceTransportType;
+import org.thingsboard.server.common.transport.SessionMsgListener;
 import org.thingsboard.server.common.transport.TransportService;
 import org.thingsboard.server.common.transport.TransportServiceCallback;
 import org.thingsboard.server.common.transport.auth.SessionInfoCreator;
@@ -28,7 +29,6 @@ import org.thingsboard.server.common.transport.auth.ValidateDeviceCredentialsRes
 import org.thingsboard.server.gen.transport.TransportProtos;
 import org.thingsboard.server.transport.tcp.TbTcpTransportComponent;
 import org.thingsboard.server.transport.tcp.TcpTransportContext;
-import org.thingsboard.server.transport.tcp.protocol.eelink.messages.EelinkLoginRequest;
 import org.thingsboard.server.transport.tcp.protocol.eelink.messages.EelinkLoginResponse;
 import org.thingsboard.server.transport.tcp.protocol.eelink.messages.EelinkHeartbeatRequest;
 import org.thingsboard.server.transport.tcp.protocol.eelink.messages.EelinkHeartbeatResponse;
@@ -37,13 +37,17 @@ import org.thingsboard.server.transport.tcp.protocol.eelink.messages.EelinkAlarm
 import org.thingsboard.server.transport.tcp.protocol.eelink.messages.EelinkDataReportRequest;
 import org.thingsboard.server.transport.tcp.protocol.eelink.messages.EelinkDataReportResponse;
 import org.thingsboard.server.transport.tcp.protocol.eelink.messages.EelinkDataPacket;
+import org.thingsboard.server.transport.tcp.protocol.eelink.messages.EelinkCommandResponse;
 import org.thingsboard.server.transport.tcp.session.TcpDeviceSessionContext;
 
 import java.time.LocalDateTime;
 import java.time.temporal.ChronoUnit;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 
 import static org.thingsboard.server.common.transport.service.DefaultTransportService.SESSION_EVENT_MSG_OPEN;
+import static org.thingsboard.server.common.transport.service.DefaultTransportService.SUBSCRIBE_TO_RPC_ASYNC_MSG;
+import static org.thingsboard.server.common.transport.service.DefaultTransportService.SUBSCRIBE_TO_ATTRIBUTE_UPDATES_ASYNC_MSG;
 
 /**
  * Eelink消息处理器
@@ -112,10 +116,32 @@ public class EelinkMessageHandler {
                                         new TransportServiceCallback<Void>() {
                                             @Override
                                             public void onSuccess(Void v) {
-                                                // 注册会话
+                                                // ⭐ 从context获取commandMapper
+                                                EelinkRpcCommandMapper commandMapper = context.getEelinkRpcCommandMapper();
+                                                
+                                                // ⭐ 检查commandMapper是否可用
+                                                if (commandMapper == null) {
+                                                    log.error("[{}] ❌ commandMapper is NULL! Cannot create session listener", sessionId);
+                                                    log.error("[{}] RPC功能将不可用，但设备仍可正常上报数据", sessionId);
+                                                } else {
+                                                    log.info("[{}] ✅ commandMapper is available: {}", sessionId, commandMapper.getClass().getName());
+                                                }
+                                                
+                                                // ⭐ 创建Eelink会话监听器（注入命令映射器）
+                                                EelinkSessionMsgListener sessionListener = new EelinkSessionMsgListener(
+                                                        deviceSessionCtx, 
+                                                        transportService,
+                                                        commandMapper);
+                                                
+                                                // 保存监听器到会话上下文，以便后续处理响应时调用
+                                                deviceSessionCtx.setSessionMsgListener(sessionListener);
+                                                
+                                                // ⭐ 注册异步会话并传入监听器
                                                 transportService.registerAsyncSession(
                                                         deviceSessionCtx.getSessionInfo(),
-                                                        null); // 暂时不传SessionMsgListener
+                                                        sessionListener);
+                                                
+                                                log.info("[{}] ✅ Session listener registered successfully", sessionId);
 
                                                 // 标记已连接
                                                 deviceSessionCtx.setConnected(true);
@@ -127,6 +153,36 @@ public class EelinkMessageHandler {
                                                 // 保存认证的设备地址
                                                 deviceSessionCtx.setAuthenticatedDeviceAddress(deviceToken);
                                                 log.debug("[{}] Authenticated device address saved: {}", sessionId, deviceToken);
+                                                
+                                                // ⭐ 自动订阅RPC和属性更新
+                                                log.info("[{}] Auto-subscribing to RPC and attributes...", sessionId);
+                                                TransportProtos.TransportToDeviceActorMsg subscribeMsg = 
+                                                    TransportProtos.TransportToDeviceActorMsg.newBuilder()
+                                                        .setSessionInfo(deviceSessionCtx.getSessionInfo())
+                                                        .setSubscribeToRPC(SUBSCRIBE_TO_RPC_ASYNC_MSG)
+                                                        .setSubscribeToAttributes(SUBSCRIBE_TO_ATTRIBUTE_UPDATES_ASYNC_MSG)
+                                                        .build();
+                                                
+                                                transportService.process(subscribeMsg, new TransportServiceCallback<Void>() {
+                                                    @Override
+                                                    public void onSuccess(Void result) {
+                                                        log.info("[{}] ✅ Device automatically subscribed to RPC and attributes - SUCCESS", sessionId);
+                                                        log.info("[{}] 🔍 Subscription callback executed, device should now receive RPC calls", sessionId);
+                                                    }
+                                                    
+                                                    @Override
+                                                    public void onError(Throwable e) {
+                                                        log.error("[{}] ❌ Failed to subscribe to RPC and attributes", sessionId, e);
+                                                    }
+                                                });
+                                                
+                                                log.info("[{}] 📤 Subscription message sent to TransportService", sessionId);
+                                                log.info("[{}] 📊 SessionInfo - DeviceId: {}, TenantId: {}", 
+                                                        sessionId,
+                                                        new UUID(deviceSessionCtx.getSessionInfo().getDeviceIdMSB(), 
+                                                                deviceSessionCtx.getSessionInfo().getDeviceIdLSB()),
+                                                        new UUID(deviceSessionCtx.getSessionInfo().getTenantIdMSB(), 
+                                                                deviceSessionCtx.getSessionInfo().getTenantIdLSB()));
                                                 
                                                 // 认证成功后，继续处理消息
                                                 processMessageAfterAuth(ctx, frame, context, deviceSessionCtx, sessionId, frameCode);
@@ -637,6 +693,89 @@ public class EelinkMessageHandler {
             case 17: return "electricPower";     // 电功率
             default: return "channel" + index;   // 通道N
         }
+    }
+    
+    /**
+     * ⭐ 处理控制命令响应（帧代号0x81, 0x01等）
+     * 
+     * @param ctx Netty上下文
+     * @param frame Eelink帧
+     * @param context TCP传输上下文
+     * @param deviceSessionCtx 设备会话上下文
+     * @param sessionId 会话ID
+     */
+    public void handleControlCommandResponse(ChannelHandlerContext ctx,
+                                             EelinkFrame frame,
+                                             TcpTransportContext context,
+                                             TcpDeviceSessionContext deviceSessionCtx,
+                                             UUID sessionId) {
+        
+        byte frameCode = frame.getFrameCode();
+        log.info("[{}] Processing control command response: frameCode=0x{}, functionCode2=0x{}", 
+                sessionId, 
+                String.format("%02X", frameCode & 0xFF),
+                String.format("%02X", frame.getFunctionCode2() & 0xFF));
+        
+        try {
+            // 获取commandMapper
+            EelinkRpcCommandMapper commandMapper = context.getEelinkRpcCommandMapper();
+            if (commandMapper == null) {
+                log.error("[{}] commandMapper is NULL, cannot process response", sessionId);
+                return;
+            }
+            
+            // 1. 使用映射器解析响应
+            EelinkCommandResponse response = commandMapper.parseResponse(
+                    frameCode, 
+                    frame.getData(), 
+                    frame.getFunctionCode2());
+            
+            // 2. 设置requestId（从待处理队列中推断，或使用其他机制）
+            // 注意：优联协议的响应帧中没有携带requestId，需要通过其他方式匹配
+            // 这里简化处理：使用帧代号匹配最近的请求
+            // 更好的方式是在请求中嵌入requestId或使用序列号
+            
+            // 临时方案：从监听器获取
+            SessionMsgListener listener = deviceSessionCtx.getSessionMsgListener();
+            if (listener instanceof EelinkSessionMsgListener) {
+                EelinkSessionMsgListener eelinkListener = (EelinkSessionMsgListener) listener;
+                
+                // 获取第一个待处理的RPC（因为响应中没有requestId，按发送顺序匹配）
+                Integer matchedRequestId = findMatchingRequestId(eelinkListener, frameCode);
+                if (matchedRequestId != null) {
+                    response.setRequestId(matchedRequestId);
+                    eelinkListener.handleCommandResponse(response);
+                } else {
+                    log.warn("[{}] No matching RPC request for frameCode=0x{}", 
+                            sessionId, String.format("%02X", frameCode & 0xFF));
+                }
+            } else {
+                log.error("[{}] Invalid session listener type", sessionId);
+            }
+            
+        } catch (EelinkRpcCommandMapper.UnsupportedCommandException e) {
+            log.warn("[{}] Unsupported response frame code: 0x{}", 
+                    sessionId, String.format("%02X", frameCode & 0xFF));
+        } catch (Exception e) {
+            log.error("[{}] Failed to process control command response", sessionId, e);
+        }
+    }
+    
+    /**
+     * 查找匹配的RPC请求ID
+     * 注意：由于优联协议响应中没有requestId，这里使用简化的匹配策略
+     */
+    private Integer findMatchingRequestId(EelinkSessionMsgListener listener, byte frameCode) {
+        // 获取所有待处理的RPC请求
+        ConcurrentHashMap<Integer, TransportProtos.ToDeviceRpcRequestMsg> pending = listener.getPendingRpcRequests();
+        
+        if (pending.isEmpty()) {
+            return null;
+        }
+        
+        // 简化策略：返回第一个待处理的请求ID
+        // TODO: 更好的策略是根据frameCode和请求时间戳匹配
+        return pending.keys().nextElement();
     }
 }
 

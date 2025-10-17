@@ -89,5 +89,30 @@ public class EelinkProtocolConfig {
         }
         return sb.toString();
     }
+    
+    /**
+     * 16进制字符串转字节数组
+     * 
+     * @param hexString 16进制字符串（如"93640000"）
+     * @return 字节数组（如[0x93, 0x64, 0x00, 0x00]）
+     */
+    public static byte[] hexToBytes(String hexString) {
+        if (hexString == null || hexString.isEmpty()) {
+            return new byte[0];
+        }
+        
+        // 移除可能的空格和0x前缀
+        hexString = hexString.replaceAll("\\s+", "").replaceAll("0x", "");
+        
+        int len = hexString.length();
+        byte[] data = new byte[len / 2];
+        
+        for (int i = 0; i < len; i += 2) {
+            data[i / 2] = (byte) ((Character.digit(hexString.charAt(i), 16) << 4)
+                    + Character.digit(hexString.charAt(i + 1), 16));
+        }
+        
+        return data;
+    }
 }
 

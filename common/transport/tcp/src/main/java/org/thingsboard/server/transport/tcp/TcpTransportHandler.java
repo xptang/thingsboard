@@ -185,6 +185,21 @@ public class TcpTransportHandler extends ChannelInboundHandlerAdapter implements
                 handleEelinkAlarm(ctx, frame);
                 break;
                 
+            case (byte) 0x81:  // ⭐ 开泵关阀响应
+                handleEelinkControlResponse(ctx, frame);
+                break;
+                
+            case 0x01:  // ⭐ 关泵开阀响应
+                handleEelinkControlResponse(ctx, frame);
+                break;
+                
+            // TODO: 添加更多控制命令响应
+            // case (byte) 0xF4:  // 阀门开度控制响应
+            // case (byte) 0x5F:  // 水表类型读取响应
+            // case (byte) 0xEF:  // 水表类型设置响应
+            // case (byte) 0xE9:  // 联户抄表读取响应
+            // case (byte) 0xF9:  // 联户抄表设置响应
+                
             default:
                 log.warn("[{}] Unknown Eelink frame code: 0x{} data: {}", 
                         sessionId, Integer.toHexString(frameCode & 0xFF), frame.getDataString());
@@ -289,6 +304,20 @@ public class TcpTransportHandler extends ChannelInboundHandlerAdapter implements
                                        EelinkFrame frame) {
         if (context.getEelinkMessageHandler() != null) {
             context.getEelinkMessageHandler().handleDataReport(
+                    ctx, frame, context, deviceSessionCtx, sessionId);
+        } else {
+            log.error("[{}] EelinkMessageHandler not available", sessionId);
+            ctx.close();
+        }
+    }
+    
+    /**
+     * ⭐ 处理Eelink控制命令响应（0x81开泵关阀, 0x01关泵开阀等）
+     */
+    private void handleEelinkControlResponse(ChannelHandlerContext ctx,
+                                             EelinkFrame frame) {
+        if (context.getEelinkMessageHandler() != null) {
+            context.getEelinkMessageHandler().handleControlCommandResponse(
                     ctx, frame, context, deviceSessionCtx, sessionId);
         } else {
             log.error("[{}] EelinkMessageHandler not available", sessionId);

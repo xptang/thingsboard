@@ -52,6 +52,10 @@ public class TcpTransportContext extends TransportContext {
     private org.thingsboard.server.transport.tcp.protocol.eelink.EelinkMessageHandler eelinkMessageHandler;
 
     @Getter
+    @Autowired(required = false)
+    private org.thingsboard.server.transport.tcp.protocol.eelink.EelinkRpcCommandMapper eelinkRpcCommandMapper;
+
+    @Getter
     @Value("${transport.tcp.netty.max_payload_size:65536}")
     private Integer maxPayloadSize;
 

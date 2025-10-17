@@ -20,6 +20,7 @@ import lombok.Data;
 import lombok.extern.slf4j.Slf4j;
 import org.thingsboard.server.common.data.DeviceProfile;
 import org.thingsboard.server.common.data.TransportPayloadType;
+import org.thingsboard.server.common.transport.SessionMsgListener;
 import org.thingsboard.server.common.transport.auth.TransportDeviceInfo;
 import org.thingsboard.server.gen.transport.TransportProtos;
 import org.thingsboard.server.transport.tcp.TcpTransportContext;
@@ -46,6 +47,7 @@ public class TcpDeviceSessionContext {
     private volatile TransportProtos.SessionInfoProto sessionInfo;
     private volatile boolean connected;
     private volatile String authenticatedDeviceAddress;  // 认证的设备地址（用于Eelink协议）
+    private volatile SessionMsgListener sessionMsgListener;  // 会话消息监听器（用于处理RPC响应）
 
     private final AtomicInteger msgIdCounter = new AtomicInteger(0);
 
