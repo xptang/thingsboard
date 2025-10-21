@@ -52,6 +52,9 @@ import socket
 import struct
 import json
 import time
+import threading
+import random
+from datetime import datetime
 
 class EelinkProtocolClient:
     """Eelink（优联时空）协议客户端"""
@@ -74,6 +77,8 @@ class EelinkProtocolClient:
         self.host = host
         self.port = port
         self.sock = None
+        self.device_address = None  # 存储设备地址用于后续通信
+        self.send_lock = threading.Lock()
     
     def calculate_crc16(self, data):
         """
@@ -94,28 +99,41 @@ class EelinkProtocolClient:
                     crc = crc >> 1  # 只右移
         
         return crc
+
+    def get_address_type(self, address):
+        '''
+        根据地址字节数组，获取地址类型
+        Args:
+            address: 地址字节数组
+        Returns:
+            addr_type: 地址类型
+        '''
+        if len(address) == 2:
+            return self.ADDR_TYPE_WSN
+        elif len(address) == 4:
+            return self.ADDR_TYPE_GPRS
+        elif len(address) == 8:
+            return self.ADDR_TYPE_MAC
+        else:
+            return None
     
-    def build_frame(self, data, frame_code=0x01, addr_type=ADDR_TYPE_WSN):
+    def build_frame(self, data, frame_code, address, function_code1, function_code2, request=True):
         """
         构建Eelink协议帧
         
         Args:
             data: 数据段内容（bytes）
             frame_code: 帧代号
-            addr_type: 地址类型（决定地址段长度）
+            address: 地址段内容（bytes）
+            request: 是否为请求帧
         """
-        # 确定地址段长度
-        if addr_type == self.ADDR_TYPE_WSN:
-            address = bytes([0x00, 0x00])  # 2字节WSN地址
-        elif addr_type == self.ADDR_TYPE_GPRS:
-            address = bytes([0x00, 0x00, 0x00, 0x00])  # 4字节GPRS地址
-        else:  # ADDR_TYPE_MAC
-            address = bytes([0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])  # 8字节MAC
-        
-        # 功能码（2字节）
-        function_code1 = (addr_type << 4) | 0x00  # 第一位：地址类型
-        function_code2 = 0x10  # 第二位：路由次数1，第三位：立即处理0，第四位：当前级数1
-        
+        # 确定地址段长度和内容
+
+        addr_type = self.get_address_type(address)
+        if addr_type is None:
+            # 发出异常: 地址类型不合法
+            raise ValueError(f"Invalid address type: {address}")
+                
         # 计算帧长度：帧代号(1) + 功能码(2) + 地址段(M) + 数据段(N) + CRC(2)
         frame_length = 1 + 2 + len(address) + len(data) + 2
         
@@ -156,7 +174,7 @@ class EelinkProtocolClient:
         frame.extend(direction)      # 方向
         frame.extend(length_byte)    # 帧长度
         frame.extend(frame_code_byte)# 帧代号
-        frame.extend(function_code)  # 功能码
+        frame.extend(function_code)  # 功能码（请求: 61 01）
         frame.extend(address)        # 地址段
         frame.extend(data)           # 数据段
         frame.extend(crc_bytes)      # CRC
@@ -164,6 +182,78 @@ class EelinkProtocolClient:
         
         return bytes(frame)
     
+    def build_heartbeat_link_payload(self):
+        # 心跳类型(0x01) + 保留(0x00)
+        return bytes([0x01, 0x00])
+    
+    def build_data_report_payload(self, channels=None, storage_type=0, storage_seq=1, data_address=b"\x00\x00\x00\x00"):
+        # 参照服务器端解析：
+        # [加密标识1][数据包数量1][时间6 LE][通道数1][数据地址4 LE][存储信息4 BE float][通道数据 4*N LE floats]
+
+        # 远程测控终端内容定义
+        # 内容	长度	说明
+        # 压力	4	浮点类型，低位在前
+        # 水位	4	浮点类型，低位在前
+        # 阀门电压	4	浮点类型，低位在前
+        # 电池电压	4	浮点类型，低位在前
+        # 开关状态	4	浮点类型，低位在前
+        # 设备信息	4	浮点类型，低位在前
+        # 瞬时流量	4	浮点类型，低位在前
+        # 累计流量	4	浮点类型，低位在前
+        # 阀门开度	4	浮点类型，低位在前
+        # 阀门开度2	4	浮点类型，低位在前
+        # 阀门开度3	4	浮点类型，低位在前
+        # 瞬时流量2	4	浮点类型，低位在前
+        # 累计流量2	4	浮点类型，低位在前
+        # 瞬时流量3	4	浮点类型，低位在前
+        # 累计流量3	4	浮点类型，低位在前
+
+        if channels is None:
+            channels = [
+                (0, random.uniform(0.7, 1.5)),  # 压力
+                (1, random.uniform(1.4, 1.5)),  # 水位
+                (2, random.uniform(3.0, 3.6)),  # 阀门电压
+                (3, random.uniform(3.5, 4.2)),  # 电池电压
+                (4, self.state['pump1']),  # 开关状态
+                (5, random.uniform(0.0, 100.0)),  # 设备信息
+                (6, random.uniform(80, 100.0)),  # 瞬时流量
+                (7, random.uniform(10000, 20000)),  # 累计流量
+                (8, self.state['valve1']),  # 阀门开度
+                (9, self.state['valve2']),  # 阀门开度2
+                (10, self.state['valve3']),  # 阀门开度3
+                (11, random.uniform(80, 100.0)),  # 瞬时流量2
+                (12, random.uniform(10000,20000)),  # 累计流量2
+                (13, random.uniform(80, 100.0)),  # 瞬时流量3
+                (14, random.uniform(20000, 30000)),  # 累计流量3
+            ]
+        now = datetime.now()
+        # 加密标识0x00，数据包数量0x01
+        buf = bytearray()
+        buf.append(0x00)
+        buf.append(0x01)
+        # 时间6字节（YY MM DD hh mm ss）LE 单字节各自
+        buf.extend(bytes([
+            now.year - 2000,
+            now.month,
+            now.day,
+            now.hour,
+            now.minute,
+            now.second
+        ]))
+        # 通道数量
+        buf.append(len(channels))
+        # 数据地址4字节（低位在前）
+        if len(data_address) != 4:
+            data_address = b"\x00\x00\x00\x00"
+        buf.extend(data_address)
+        # 存储信息：storage_type*1000000 + storage_seq，作为BE float
+        storage_info = float(storage_type * 1000000 + storage_seq)
+        buf.extend(struct.pack('>f', storage_info))
+        # 通道数据：每个为LE float
+        for _, value in channels:
+            buf.extend(struct.pack('<f', float(value)))
+        return bytes(buf)
+
     def parse_frame(self, timeout=5):
         """解析接收到的帧"""
         self.sock.settimeout(timeout)
@@ -247,27 +337,116 @@ class EelinkProtocolClient:
             
         except socket.timeout:
             raise TimeoutError("Timeout waiting for response")
+
+    def parse_raw_frame(self, timeout=None):
+        # 通用帧解析，返回字典
+        if timeout is not None:
+            self.sock.settimeout(timeout)
+        # 起始段
+        start_bytes = self.sock.recv(2)
+        if len(start_bytes) != 2:
+            return None
+        start_byte1, start_byte2 = start_bytes[0], start_bytes[1]
+        if (start_byte1 & 0xF8) != (self.HEADER_BASE & 0xF8) or start_byte2 != self.HEADER_SECOND:
+            return None
+        length_high_bits = start_byte1 & 0x07
+        direction = self.sock.recv(1)[0]
+        length_low_bits = self.sock.recv(1)[0]
+        frame_length = (length_high_bits << 8) | length_low_bits
+        frame_data = self.sock.recv(frame_length)
+        if len(frame_data) != frame_length:
+            return None
+        footer = self.sock.recv(2)
+        if footer != self.FOOTER:
+            return None
+        offset = 0
+        frame_code = frame_data[offset]
+        offset += 1
+        function_code1 = frame_data[offset]
+        function_code2 = frame_data[offset + 1]
+        offset += 2
+        # 地址长度从function_code1高4位判断
+        addr_type_nibble = (function_code1 >> 4) & 0x0F
+        if addr_type_nibble == 0x0:
+            addr_len = 2
+        elif addr_type_nibble == 0x6:
+            addr_len = 4
+        elif addr_type_nibble == 0xF:
+            addr_len = 8
+        else:
+            addr_len = 2
+        address = frame_data[offset:offset + addr_len]
+        offset += addr_len
+        data_len = frame_length - 1 - 2 - addr_len - 2
+        payload = frame_data[offset:offset + data_len]
+        return {
+            'direction': direction,
+            'frame_code': frame_code,
+            'function_code1': function_code1,
+            'function_code2': function_code2,
+            'address': address,
+            'payload': payload
+        }
     
     def connect(self):
         """连接服务器"""
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.sock.connect((self.host, self.port))
         print(f"✓ Connected to {self.host}:{self.port}")
+        # 设备状态（模拟）
+        self.state = {
+            'pump1': False,
+            'pump2': False,
+            'valve1': False,
+            'valve2': False,
+            'valve3': False,
+        }
     
     def authenticate(self, token):
         """
         Eelink设备登陆
         帧代号：0x41
-        数据段：设备Token（ASCII字符串）
+        地址段：设备Token（ASCII字符串转换为字节）
+        数据段：空（或保留字段）
         响应：0x00成功，0x01失败
         """
         print(f"\n→ Eelink Login with token: {token}")
+                
+        # 保存设备地址用于后续通信
+        self.device_address = bytes.fromhex(token)
         
-        # 数据段直接是设备Token
-        login_data = token.encode('ascii')
-        
-        # 使用帧代号0x41（设备登陆）
-        frame = self.build_frame(login_data, frame_code=0x41)
+        # 数据段: 
+        # 19	10字节CCID+8字节IMEI+1字节（复位原因+高低位地址）
+        # 4	软件版本（浮点数，2位小数，高位在前）
+        # 4	硬件版本（浮点数，2位小数，高位在前）
+        # 1	复位次数
+        login_data = bytearray()
+        # 生成10字节CCID
+        import random
+        ccid = ''.join(random.choices('0123456789', k=10))
+        ccid_bytes = ccid.encode('ascii')
+        login_data.extend(ccid_bytes)
+        # 生成8字节IMEI
+        imei = ''.join(random.choices('0123456789', k=8))
+        imei_bytes = imei.encode('ascii')
+        login_data.extend(imei_bytes)
+        # 生成1字节（复位原因+高低位地址）
+        reset_reason = random.randint(0, 15)
+        reset_address = random.randint(0, 15)
+        reset_info = (reset_reason << 4) | reset_address
+        login_data.extend(struct.pack('>B', reset_info))
+        # 生成4字节软件版本
+        software_version = random.uniform(0.00, 100.00)
+        login_data.extend(struct.pack('>f', software_version))
+        # 生成4字节硬件版本
+        hardware_version = random.uniform(0.00, 100.00)
+        login_data.extend(struct.pack('>f', hardware_version))
+        # 生成1字节复位次数
+        reset_count = random.randint(0, 255)
+        login_data.extend(struct.pack('>B', reset_count))
+
+        # 使用帧代号0x41（设备登陆），地址段为token（请求功能码 0x61 0x01）
+        frame = self.build_frame(login_data, frame_code=0x41, address=self.device_address, function_code1=0x61, function_code2=0x01, request=True)
         
         # 打印帧信息
         print(f"  Sending login frame ({len(frame)} bytes):")
@@ -377,33 +556,114 @@ class EelinkProtocolClient:
         except socket.timeout:
             raise TimeoutError("Timeout waiting for login response")
     
-    def send_telemetry(self, data):
-        """发送遥测数据"""
-        message = f"TELEMETRY:{json.dumps(data)}".encode('utf-8')
-        print(f"\n→ Sending telemetry: {data}")
-        
-        frame = self.build_frame(message)
-        print(f"  Frame: {len(frame)} bytes")
-        
-        self.sock.sendall(frame)
-        
-        response = self.parse_frame()
-        print(f"← Response: {response}")
-        
-        return response.strip() == "TELEMETRY_OK"
-    
-    def send_attributes(self, data):
-        """发送属性"""
-        message = f"ATTRIBUTES:{json.dumps(data)}".encode('utf-8')
-        print(f"\n→ Sending attributes: {data}")
-        
-        frame = self.build_frame(message)
-        self.sock.sendall(frame)
-        
-        response = self.parse_frame()
-        print(f"← Response: {response}")
-        
-        return response.strip() == "ATTRIBUTES_OK"
+    def send_heartbeat(self):
+        payload = self.build_heartbeat_link_payload()
+        frame = self.build_frame(payload, frame_code=0x43, address=self.device_address, function_code1=0x61, function_code2=0x01, request=True)
+        with self.send_lock:
+            self.sock.sendall(frame)
+        # 接收统一由接收线程处理，避免并发读取冲突
+
+    def send_data_report(self):
+        payload = self.build_data_report_payload()
+        frame = self.build_frame(payload, frame_code=0x46, address=self.device_address, function_code1=0x61, function_code2=0x01, request=True)
+        with self.send_lock:
+            self.sock.sendall(frame)
+        # 接收统一由接收线程处理
+
+    def _handle_command_request(self, frame):
+        fc = frame['frame_code']
+        data = frame['payload']
+        # 0x81 开泵关阀, 0x01 关泵开阀
+        if fc in (0x81, 0x01):
+            if len(data) < 1:
+                return
+            device_code = data[0]
+            # 更新状态
+            if fc == 0x81:
+                # open: 1=泵2,2=泵1,3=阀1,4=阀2,5=阀3
+                if device_code == 1:
+                    self.state['pump2'] = True
+                elif device_code == 2:
+                    self.state['pump1'] = True
+                elif device_code == 3:
+                    self.state['valve1'] = True
+                elif device_code == 4:
+                    self.state['valve2'] = True
+                elif device_code == 5:
+                    self.state['valve3'] = True
+                print(f"→ Command(open) device={device_code} -> state={self.state}")
+            else:
+                # close: 0=泵1泵2,1=泵1,2=泵2,3=阀1,4=阀2,5=阀3
+                if device_code == 0:
+                    self.state['pump1'] = False
+                    self.state['pump2'] = False
+                elif device_code == 1:
+                    self.state['pump1'] = False
+                elif device_code == 2:
+                    self.state['pump2'] = False
+                elif device_code == 3:
+                    self.state['valve1'] = False
+                elif device_code == 4:
+                    self.state['valve2'] = False
+                elif device_code == 5:
+                    self.state['valve3'] = False
+                print(f"→ Command(close) device={device_code} -> state={self.state}")
+
+            # 回复成功：function_code2=0x00，数据段为设备编号1字节
+            resp_data = bytes([device_code])
+            # 使用设备地址构建响应帧
+            resp_frame = self.build_frame(resp_data, frame_code=fc, address=self.device_address, function_code1=0x61, function_code2=0x00, request=False)
+            # 调整function_code2为0x00：重写第7字节（功能码第二字节）
+            # 起始2 + 方向1 + 长度1 + 帧代号1 + 功能码2 -> 索引(2+1+1+1+1)=6 是功能码2
+            resp_frame = bytearray(resp_frame)
+            resp_frame[6] = 0x00
+            with self.send_lock:
+                self.sock.sendall(bytes(resp_frame))
+            print("← Command response sent (success)")
+
+    def receive_loop(self):
+        # 设置接收超时为较短时间，避免长时间阻塞
+        self.sock.settimeout(2.0)
+        while True:
+            try:
+                frame = self.parse_raw_frame(timeout=2.0)
+                if not frame:
+                    continue
+                # 打印收到的帧信息
+                fc = frame['frame_code']
+                print(f"← Received frame: code=0x{fc:02X}, dir=0x{frame['direction']:02X}, fc2=0x{frame['function_code2']:02X}")
+                
+                # 处理服务器下发的控制请求（0x81开泵, 0x01关泵）
+                if fc in (0x81, 0x01):
+                    self._handle_command_request(frame)
+                # 处理响应帧（心跳、数据上报等的响应）
+                elif fc in (0x43, 0x46, 0x41):
+                    # 这些是对我们发送的请求的响应
+                    if frame['function_code2'] == 0x00:
+                        print(f"  ✓ Success response")
+                    else:
+                        print(f"  ⚠ Response with fc2=0x{frame['function_code2']:02X}")
+            except socket.timeout:
+                # 超时是正常的，继续等待
+                pass
+            except Exception as e:
+                print(f"recv error: {e}")
+                time.sleep(1)
+
+    def start_periodic_tasks(self, hb_interval=30, data_interval=60):
+        def hb_loop():
+            while True:
+                time.sleep(hb_interval)
+                print(f"\n→ Sending heartbeat...")
+                self.send_heartbeat()
+        def data_loop():
+            while True:
+                time.sleep(data_interval)
+                print(f"\n→ Sending data report...")
+                self.send_data_report()
+        # threading.Thread(target=hb_loop, daemon=True).start()
+        threading.Thread(target=data_loop, daemon=True).start()
+        threading.Thread(target=self.receive_loop, daemon=True).start()
     
     def disconnect(self):
         """断开连接"""
@@ -467,28 +727,12 @@ def main():
             return
         
         print("\n✓ Eelink Login successful!")
-        print("\n提示:")
-        print("- 数据上报功能(0x46)、心跳(0x43)等其他功能尚未在服务器端实现")
-        print("- 如需使用16进制字符串测试，请使用: python3 eelink_simple_test.py")
-        
-        # TODO: 以下功能需要在服务器端实现相应的Eelink帧处理后再启用
-        # # 发送遥测数据
-        # telemetry = {
-        #     "temperature": 25.5,
-        #     "humidity": 60,
-        #     "pressure": 1013.25
-        # }
-        # client.send_telemetry(telemetry)
-        # 
-        # # 发送属性
-        # attributes = {
-        #     "model": "EelinkDevice",
-        #     "firmwareVersion": "1.0.0",
-        #     "protocol": "eelink_binary",
-        #     "vendor": "Beijing Youlinkedin Technology Co., Ltd."
-        # }
-        # client.send_attributes(attributes)
-        
+        print("\n→ Starting periodic heartbeat(0x43) and data report(0x46)...")
+        client.start_periodic_tasks(hb_interval=20, data_interval=40)
+        # 持续运行直到中断
+        while True:
+            time.sleep(1)
+                
     except KeyboardInterrupt:
         print("\n\n→ Stopping...")
     except Exception as e:
@@ -500,4 +744,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
