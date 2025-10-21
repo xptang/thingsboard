@@ -272,14 +272,25 @@ def run_listen_mode(host='localhost', port=8883, duration=60):
         print(f"{'='*70}\n")
         
         start_time = time.time()
+        last_heartbeat_time = time.time()
+        last_data_report_time = time.time()
         command_count = 0
         
         while time.time() - start_time < duration:
             # 定期发送心跳（每30秒）
-            if int(time.time() - start_time) % 30 == 0:
+            if time.time() - last_heartbeat_time >= 40:
                 print("\n→ 发送链路心跳...")
                 heartbeat = "88FBFA0B4361019364000001009ECEFCFC"
                 client.send_hex(heartbeat)
+                last_heartbeat_time = time.time()
+                time.sleep(1)
+
+            # 定期发送数据上报
+            if time.time() - last_data_report_time >= 30:
+                print("\n→ 发送数据上报...")
+                data_report = "88FBFA4646610193640000000118030F0F29340B93640000000000000000A03F0000604000004841666666400000803F00000000CDCC744100509A44000048420000F041000034423BA5FCFC"
+                client.send_hex(data_report)
+                last_data_report_time = time.time()
                 time.sleep(1)
             
             # 监听平台命令
