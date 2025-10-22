@@ -1,0 +1,136 @@
+{
+  "project": {
+    "name": "ThingsBoard",
+    "version": "4.3.0-SNAPSHOT",
+    "type": "IoT Platform",
+    "root": ".",
+    "note": "All paths are relative to project root"
+  },
+  "tech_stack": {
+    "backend": {
+      "language": "Java 17",
+      "framework": "Spring Boot 3.4.8",
+      "build_tool": "Maven",
+      "key_dependencies": ["Redis", "Cassandra", "JWT", "Guava"]
+    },
+    "frontend": {
+      "language": "TypeScript 5.5.4",
+      "framework": "Angular 18.2.13",
+      "state_management": "NgRx",
+      "ui_library": "Angular Material 18.2.14",
+      "styling": "Tailwind CSS 3.4.15",
+      "build_tool": "esbuild"
+    }
+  },
+  "directory_shortcuts": {
+    "backend_main": "application/",
+    "backend_dao": "dao/",
+    "backend_common": "common/",
+    "backend_rules": "rule-engine/",
+    "frontend_root": "ui-ngx/src/app/",
+    "frontend_core": "ui-ngx/src/app/core/",
+    "frontend_modules": "ui-ngx/src/app/modules/",
+    "frontend_shared": "ui-ngx/src/app/shared/",
+    "frontend_assets": "ui-ngx/src/assets/",
+    "i18n": "ui-ngx/src/assets/locale/"
+  },
+  "search_priority": {
+    "high": [
+      "ui-ngx/src/app/core/services/",
+      "ui-ngx/src/app/modules/home/",
+      "ui-ngx/src/app/modules/common/",
+      "application/src/main/java/org/thingsboard/server/controller/"
+    ],
+    "medium": [
+      "ui-ngx/src/app/shared/",
+      "ui-ngx/src/assets/locale/",
+      "application/src/main/java/org/thingsboard/server/service/"
+    ],
+    "low": [
+      "dao/",
+      "common/",
+      "ui-ngx/src/assets/dashboard/"
+    ],
+    "ignore": [
+      "node_modules/",
+      "target/",
+      "dist/",
+      ".git/",
+      ".angular/"
+    ]
+  },
+  "common_files": {
+    "menu_service": "ui-ngx/src/app/core/services/menu.service.ts",
+    "menu_models": "ui-ngx/src/app/core/services/menu.models.ts",
+    "auth_state": "ui-ngx/src/app/core/auth/auth.models.ts",
+    "auth_selectors": "ui-ngx/src/app/core/auth/auth.selectors.ts",
+    "core_state": "ui-ngx/src/app/core/core.state.ts",
+    "utils": "ui-ngx/src/app/core/utils.ts",
+    "app_module": "ui-ngx/src/app/app.module.ts",
+    "app_routing": "ui-ngx/src/app/app-routing.module.ts",
+    "angular_config": "ui-ngx/angular.json",
+    "package_json": "ui-ngx/package.json",
+    "tsconfig": "ui-ngx/tsconfig.json",
+    "eslint_config": "ui-ngx/eslint.config.mjs",
+    "tailwind_config": "ui-ngx/tailwind.config.js",
+    "parent_pom": "pom.xml",
+    "app_pom": "application/pom.xml"
+  },
+  "code_patterns": {
+    "angular_service": {
+      "decorator": "@Injectable({ providedIn: 'root' })",
+      "imports": ["Injectable", "Observable", "Subject", "ReplaySubject"],
+      "store_usage": "this.store.pipe(select(selector))"
+    },
+    "ngrx_pattern": {
+      "select": "this.store.pipe(select(selectAuth), take(1))",
+      "dispatch": "this.store.dispatch(action)"
+    },
+    "router_events": {
+      "pattern": "this.router.events.pipe(filter(event => event instanceof NavigationEnd))"
+    },
+    "spring_controller": {
+      "annotation": "@RestController",
+      "mapping": "@RequestMapping(value = \"/api/...\")"
+    }
+  },
+  "dev_commands": {
+    "frontend": {
+      "start": "cd ui-ngx && yarn start",
+      "build": "cd ui-ngx && yarn build:prod",
+      "lint": "cd ui-ngx && yarn lint",
+      "install": "cd ui-ngx && yarn install"
+    },
+    "backend": {
+      "build": "mvn clean install",
+      "build_skip_tests": "mvn clean install -DskipTests",
+      "test": "mvn test",
+      "package": "mvn clean package"
+    }
+  },
+  "supported_languages": [
+    "zh_CN", "en_US", "fr_FR", "de_DE", "es_ES", "ja_JP", 
+    "ko_KR", "pt_BR", "ru_RU", "uk_UA", "it_IT", "pl_PL"
+  ],
+  "key_features": {
+    "frontend": [
+      "Dashboard system",
+      "Rule engine UI",
+      "Device management",
+      "User/Role management",
+      "Data visualization",
+      "Map integration",
+      "Multi-tenancy"
+    ],
+    "backend": [
+      "REST API",
+      "Rule engine",
+      "MQTT transport",
+      "Device provisioning",
+      "Telemetry processing",
+      "Alarm management",
+      "Multi-tenancy"
+    ]
+  }
+}
+

@@ -1,0 +1,73 @@
+# 依赖和构建产物
+node_modules/
+target/
+dist/
+out/
+build/
+
+# IDE 和编辑器
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# 日志文件
+*.log
+logs/
+
+# 锁文件（已知内容）
+yarn.lock
+package-lock.json
+pom.xml.versionsBackup
+
+# 编译缓存
+.angular/
+.cache/
+*.tsbuildinfo
+
+# 测试覆盖率
+coverage/
+.nyc_output/
+
+# 临时文件
+*.tmp
+*.temp
+.DS_Store
+Thumbs.db
+
+# 大型静态资源（按需查看）
+ui-ngx/src/assets/dashboard/
+ui-ngx/src/assets/map/
+application/src/main/data/json/system/widget_types/
+
+# Git
+.git/
+.gitignore
+
+# Docker
+.dockerignore
+docker/*.pid
+
+# 打包文件
+*.jar
+*.war
+*.zip
+*.tar.gz
+
+# 备份文件
+*.bak
+*.backup
+
+# 环境变量（敏感信息）
+.env
+.env.local
+.env.*.local
+
+# 数据库
+*.db
+*.sqlite
+
+# Maven 本地仓库缓存
+.m2/
+

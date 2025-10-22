@@ -1,0 +1,94 @@
+# ThingsBoard 项目 AI 助手规则
+
+**注意**: 所有路径均为相对于项目根目录的相对路径
+
+## 项目类型
+全栈 IoT 平台：Java Spring Boot 后端 + Angular 18 前端
+
+## 目录结构快速参考
+
+### 后端 (Java 17 + Spring Boot 3.4.8 + Maven)
+- `application/` - 主应用入口
+- `dao/` - 数据访问层
+- `common/` - 共享工具类
+- `rule-engine/` - 规则引擎核心
+- `transport/` - 通信协议层（MQTT/HTTP）
+- `rest-client/` - REST API 客户端
+
+### 前端 (Angular 18 + TypeScript + NgRx)
+- `ui-ngx/src/app/core/` - 核心服务、认证、API
+- `ui-ngx/src/app/modules/` - 功能模块（仪表盘、主页等）
+- `ui-ngx/src/app/shared/` - 共享组件
+- `ui-ngx/src/assets/locale/` - 国际化文件
+
+## 代码搜索策略
+
+### 前端任务
+1. 服务 → `ui-ngx/src/app/core/services/`
+2. 组件 → `ui-ngx/src/app/modules/[feature]/`
+3. API → `ui-ngx/src/app/core/api/`
+4. 状态管理 → `ui-ngx/src/app/core/auth/` 或 `*.state.ts`
+5. 工具函数 → `ui-ngx/src/app/core/utils.ts`
+
+### 后端任务
+1. REST 端点 → `application/src/main/java/.../controller/`
+2. 业务逻辑 → `application/src/main/java/.../service/`
+3. 数据模型 → `dao/src/main/java/.../entity/`
+4. 配置 → `application/src/main/resources/`
+
+## 编码规范
+
+### Angular
+- 使用 `@Injectable({ providedIn: 'root' })` 注入服务
+- 状态管理用 NgRx (Store + Effects)
+- Observable 订阅使用 RxJS operators
+- 组件文件：`*.component.ts/html/scss`
+- 使用 Tailwind CSS + Angular Material
+
+### Java
+- 遵循 Spring Boot 最佳实践
+- 使用 `@Service`, `@Controller`, `@Repository` 注解
+- RESTful API 用 `@RestController` + `@RequestMapping`
+
+### TypeScript
+- 严格类型检查
+- 接口定义在 `*.models.ts`
+- 避免 `any` 类型
+
+## 常用路径
+
+```typescript
+// 菜单服务
+ui-ngx/src/app/core/services/menu.service.ts
+
+// 认证
+ui-ngx/src/app/core/auth/
+
+// 国际化
+ui-ngx/src/assets/locale/locale.constant-zh_CN.json
+```
+
+## 忽略扫描
+- `node_modules/`, `target/`, `dist/`, `.git/`
+- `ui-ngx/src/assets/` (除非处理静态资源)
+- `*.log`, `*.lock`
+
+## 许可证
+所有源文件需包含 Apache License 2.0 头部 (2016-2025)
+
+## 开发命令
+```bash
+# 前端
+cd ui-ngx && yarn start  # 开发服务器
+cd ui-ngx && yarn build:prod  # 生产构建
+
+# 后端
+mvn clean install -DskipTests  # 快速构建
+```
+
+## 特别注意
+- 前端用 esbuild 构建（Angular 18）
+- 地图用 Leaflet + MapLibre GL
+- 图表用 ECharts
+- 代码编辑用 Ace Editor
+
